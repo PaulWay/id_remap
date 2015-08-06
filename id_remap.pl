@@ -4,6 +4,7 @@ use warnings;
 use strict;
 use autodie;
 
+use File::Find;
 use Getopt::Long;
 
 # id_remap - a script to record UIDs and GIDs in a given range before a
@@ -113,9 +114,11 @@ sub before {
 }
 
 sub after {
-	# Read through the list of IDs and usernames in the file.  Issue a find
-	# and chown/chgrp by name for each user or group that has changed ID.
+	# Read through the list of IDs and usernames in the file, remembering
+	# those things that have changed ID.
 	open my $fh, '<', $mapfile;
+	my %user_remap_to;
+	my %group_remap_to;
 	while (<$fh>) {
 		chomp;
 		my ($type, $id, $name) = split m{:};
@@ -128,14 +131,7 @@ sub after {
 				print "Note: user $name has id $id before and after.\n"
 				 if $verbose;
 			} else {
-				if ($dry_run) {
-					print "Note: would have chown'ed files for $name from old id $id to new id $newuid\n";
-				} else {
-					my $command = "find '$base_path' -uid $id -print0 | xargs -0r chown $name";
-					print "Running: $command\n"
-					 if $verbose;
-					system ($command);
-				}
+				$user_remap_to{$id} = $newuid;
 			}
 		} elsif ($type eq 'groups') {
 			# Check gid of name
@@ -149,10 +145,7 @@ sub after {
 				if ($dry_run) {
 					print "Note: would have chgrp'ed files for $name from old id $id to new id $newgid\n";
 				} else {
-					my $command = "find '$base_path' -gid $id -print0 | xargs -0r chgrp $name";
-					print "Running: $command\n"
-					 if $verbose;
-					system ($command);
+				$group_remap_to{$id} = $newgid;
 				}
 			}
 		} else {
@@ -160,6 +153,36 @@ sub after {
 		}
 	}
 	close $fh;
+	
+	# Now search the file system changing the owner and group of each object
+	# that has changed.
+	my $check_id_sub = sub {
+		# Remember, we're now in $File::Find::dir, so stat and chown on $_
+		my ($fuid, $fgid) = (stat($_))[4,5];
+		my $changed = 0;
+		my $newfuid = $fuid; my $newfgid = $fgid;
+		if (exists $user_remap_to{$fuid}) {
+			$changed = 1;
+			$newfuid = $user_remap_to{$fuid};
+		}
+		if (exists $group_remap_to{$fgid}) {
+			$changed = 1;
+			$newfgid = $group_remap_to{$fgid};
+		}
+		if ($changed) {
+			if ($dry_run) {
+				print "Would have changed '$File::Find::name' to ($newfuid, $newfgid)\n";
+			} else {
+				print "Changing '$File::Find::name' to ($newfuid, $newfgid)\n"
+				 if $verbose;
+				# Optimise here: Perl's chown takes an array of files.  Batch
+				# arguments up per directory?
+				chown $newfuid, $newfgid, $_;
+			}
+		}
+	};
+	
+	find($check_id_sub, $base_path);
 }
 
 if ($mode eq 'before') {
