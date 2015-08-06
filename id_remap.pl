@@ -6,9 +6,32 @@ use autodie;
 
 use Getopt::Long;
 
+# id_remap - a script to record UIDs and GIDs in a given range before a
+# change to their numbering and reassign the contents of a directory path
+# to the correct usernames and group names afterward.
+
+# Written by Paul Wayper for Red Hat in August 2015.
+
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#  
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#  
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+#  MA 02110-1301, USA.
+#  
+
 my %modes = map { $_ => 1 } qw{ before after };
 my $mode = 'before';
 my $mapfile = 'mapfile.txt';
+my ($start_id, $end_id);
 my ($start_uid, $end_uid);
 my ($start_gid, $end_gid);
 my $base_path;
@@ -18,6 +41,8 @@ my $verbose = 0;
 GetOptions(
 	'mode|m=s'			=> \$mode,
 	'file|f=s'			=> \$mapfile,
+	'start-id|s=i'		=> \$start_id,
+	'end-id|e=i'		=> \$end_id,
 	'start-uid|su=i'	=> \$start_uid,
 	'end-uid|eu=i'		=> \$end_uid,
 	'start-gid|sg=i'	=> \$start_gid,
@@ -32,17 +57,25 @@ unless (exists $modes{$mode}) {
 }
 if ($mode eq 'before') {
 	# Check before mode options
+	if (defined $start_id and not defined $start_uid and not defined $start_gid) {
+		$start_uid = $start_id;
+		$start_gid = $start_id;
+	}
+	if (defined $end_id and not defined $end_uid and not defined $end_gid) {
+		$end_uid = $end_id;
+		$end_gid = $end_id;
+	}
 	unless (defined $start_uid) {
-		die "Error: start UID must be set by -start-uid or -su\n";
+		die "Error: start UID must be set by -start-uid or -su (or -start-id | -s)\n";
 	}
 	unless (defined $end_uid) {
-		die "Error: end UID must be set by -end-id or -eu\n";
+		die "Error: end UID must be set by -end-id or -eu (or -end-id | -e)\n";
 	}
 	unless (defined $start_gid) {
-		die "Error: start GID must be set by -start-gid or -sg\n";
+		die "Error: start GID must be set by -start-gid or -sg (or -start-id | -s)\n";
 	}
 	unless (defined $end_gid) {
-		die "Error: end GID must be set by -end-gid or -eg\n";
+		die "Error: end GID must be set by -end-gid or -eg (or -end-id | -e)\n";
 	}
 } elsif ($mode eq 'after') {
 	unless (defined $base_path) {
