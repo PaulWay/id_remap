@@ -11,6 +11,7 @@ use Getopt::Long;
 # to the correct usernames and group names afterward.
 
 # Written by Paul Wayper for Red Hat in August 2015.
+# vim: set ts=4 ai :
 
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -26,7 +27,6 @@ use Getopt::Long;
 #  along with this program; if not, write to the Free Software
 #  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 #  MA 02110-1301, USA.
-#  
 
 my %modes = map { $_ => 1 } qw{ before after };
 my $mode = 'before';
