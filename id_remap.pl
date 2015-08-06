@@ -92,7 +92,8 @@ sub after {
 			if (not defined $newuid) {
 				warn "Warning: user $name does not have an id now (old ID = $id).\n";
 			} elsif ($newuid == $id) {
-				print "Note: user $name has id $id before and after.\n";
+				print "Note: user $name has id $id before and after.\n"
+				 if $verbose;
 			} else {
 				if ($dry_run) {
 					print "Note: would have chown'ed files for $name from old id $id to new id $newuid\n";
@@ -109,7 +110,8 @@ sub after {
 			if (not defined $newgid) {
 				warn "Warning: group $name does not have an id now (old ID = $id).\n";
 			} elsif ($newgid == $id) {
-				print "Note: group $name has id $id before and after.\n";
+				print "Note: group $name has id $id before and after.\n"
+				 if $verbose;
 			} else {
 				if ($dry_run) {
 					print "Note: would have chgrp'ed files for $name from old id $id to new id $newgid\n";
