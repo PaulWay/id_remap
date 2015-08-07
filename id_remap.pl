@@ -159,26 +159,17 @@ sub after {
 	my $check_id_sub = sub {
 		# Remember, we're now in $File::Find::dir, so stat and chown on $_
 		my ($fuid, $fgid) = (stat($_))[4,5];
-		my $changed = 0;
-		my $newfuid = $fuid; my $newfgid = $fgid;
-		if (exists $user_remap_to{$fuid}) {
-			$changed = 1;
-			$newfuid = $user_remap_to{$fuid};
-		}
-		if (exists $group_remap_to{$fgid}) {
-			$changed = 1;
-			$newfgid = $group_remap_to{$fgid};
-		}
-		if ($changed) {
-			if ($dry_run) {
-				print "Would have changed '$File::Find::name' to ($newfuid, $newfgid)\n";
-			} else {
-				print "Changing '$File::Find::name' to ($newfuid, $newfgid)\n"
-				 if $verbose;
-				# Optimise here: Perl's chown takes an array of files.  Batch
-				# arguments up per directory?
-				chown $newfuid, $newfgid, $_;
-			}
+		return unless exists $user_remap_to{$fuid} or exists $group_remap_to{$fgid};
+		my $newfuid = $user_remap_to{$fuid} || $fuid; 
+		my $newfgid = $group_remap_to{$fgid} || $fgid;
+		if ($dry_run) {
+			print "Would have changed '$File::Find::name' to ($newfuid, $newfgid)\n";
+		} else {
+			print "Changing '$File::Find::name' to ($newfuid, $newfgid)\n"
+			 if $verbose;
+			# Optimise here: Perl's chown takes an array of files.  Batch
+			# arguments up per directory?
+			chown $newfuid, $newfgid, $_;
 		}
 	};
 	
