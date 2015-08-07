@@ -113,6 +113,12 @@ sub before {
 	print "\n" if $verbose;
 }
 
+sub pluralise {
+	my ($number, $singular, $plural) = @_;
+	$plural = $singular . 's' if not $plural;
+	return abs($number) != 1 ? $plural : $singular;
+}
+
 sub after {
 	# Read through the list of IDs and usernames in the file, remembering
 	# those things that have changed ID.
@@ -153,12 +159,20 @@ sub after {
 		}
 	}
 	close $fh;
+	my $user_remap_count = scalar keys %user_remap_to;
+	my $group_remap_count = scalar keys %group_remap_to;
+	print pluralise($user_remap_count, 'user'), " and ",
+	      pluralise($group_remap_count, 'group'), " to convert.\n";
+	print "Ready to search file system from '$base_path'...\n";
 	
 	# Now search the file system changing the owner and group of each object
 	# that has changed.
+	my $entities_checked = 0;
+	my $entities_changed = 0;
 	my $check_id_sub = sub {
 		# Remember, we're now in $File::Find::dir, so stat and chown on $_
 		my ($fuid, $fgid) = (stat($_))[4,5];
+		$entities_checked++;
 		return unless exists $user_remap_to{$fuid} or exists $group_remap_to{$fgid};
 		my $newfuid = $user_remap_to{$fuid} || $fuid; 
 		my $newfgid = $group_remap_to{$fgid} || $fgid;
@@ -170,10 +184,13 @@ sub after {
 			# Optimise here: Perl's chown takes an array of files.  Batch
 			# arguments up per directory?
 			chown $newfuid, $newfgid, $_;
+			$entities_changed++;
 		}
 	};
 	
 	find($check_id_sub, $base_path);
+	print pluralise($entities_checked, 'file system object'), " checked, ",
+		  pluralise($entities_changed, 'file system object'), " changed.\n";
 }
 
 if ($mode eq 'before') {
