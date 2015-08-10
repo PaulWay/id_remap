@@ -203,6 +203,10 @@ sub after {
 		# Remember, we're now in $File::Find::dir, so stat and chown on $_
 		my ($fuid, $fgid) = (stat($_))[4,5];
 		$entities_checked++;
+		unless (defined $fuid and defined $fgid) {
+			warn "Warning: file '$File::Find::name' stat failed - maybe file is missing?\n";
+			return;
+		}
 		return unless exists $user_remap_to{$fuid} or exists $group_remap_to{$fgid};
 		my $newfuid = $user_remap_to{$fuid} || $fuid; 
 		my $newfgid = $group_remap_to{$fgid} || $fgid;
