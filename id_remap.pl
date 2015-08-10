@@ -123,7 +123,10 @@ sub before {
 	# Iterate through every ID in the range looking for valid IDs.  Remember
 	# their username in the file;
 	open my $fh, '>', $mapfile;
+
 	# scan users:
+	my $users_found = 0;
+	my $start_time = time;
 	foreach my $uid ($start_uid .. $end_uid) {
 		print "\rChecking user $uid..."
 		 if $verbose;
@@ -131,8 +134,15 @@ sub before {
 		if (defined $name) {
 			print $fh "users:$uid:$name\n";
 		}
+		$users_found ++;
 	}
+	my $end_time = time;
+	print "\n" if $verbose;
+	time_stats($start_time, $end_time, $users_found, 'user');
+
 	# scan groups:
+	my $groups_found = 0;
+	$start_time = time;
 	foreach my $gid ($start_gid .. $end_gid) {
 		print "\rChecking group $gid..."
 		 if $verbose;
@@ -140,9 +150,13 @@ sub before {
 		if (defined $name) {
 			print $fh "groups:$gid:$name\n";
 		}
+		$groups_found ++;
 	}
-	close $fh;
+	$end_time = time;
 	print "\n" if $verbose;
+	time_stats($start_time, $end_time, $groups_found, 'group');
+
+	close $fh;
 }
 
 sub after {
