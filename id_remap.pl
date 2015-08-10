@@ -87,6 +87,38 @@ if ($verbose) {
 	$| = 1; # Flush stdout after every write
 }
 
+sub pluralise {
+	my ($number, $singular, $plural, $no_number) = @_;
+	$plural = $singular . 's' if not $plural;
+	my $desc = abs($number) != 1 ? $plural : $singular;
+	if ($no_number) {
+		return $desc;
+	} else {
+		return "$number $desc";
+	}
+}
+
+sub time_stats {
+	my ($before, $after, $ops, $opname) = @_;
+	my $diff = $after - $before;
+	my @int_names = qw{ second minute hour day };
+	my @intervals = ( 60, 60, 24 );
+	my $interval = 0;
+	my $time_desc = '';
+	do {
+		if ($time_desc ne '') {
+			$time_desc = ', ' . $time_desc;
+		}
+		$time_desc = pluralise($diff % $intervals[$interval], $int_names[$interval])
+		 . $time_desc;
+		$diff /= $intervals[$interval];
+		$interval++;
+	} while ($diff > $intervals[$interval]);
+	printf "%s took %s, %.2f %s/sec\n", 
+	 pluralise($ops, $opname), $time_desc, 
+	 $diff/$ops, pluralise(int($diff/$ops), $opname, "$opname", "no number");
+}
+
 sub before {
 	# Iterate through every ID in the range looking for valid IDs.  Remember
 	# their username in the file;
@@ -113,18 +145,14 @@ sub before {
 	print "\n" if $verbose;
 }
 
-sub pluralise {
-	my ($number, $singular, $plural) = @_;
-	$plural = $singular . 's' if not $plural;
-	return abs($number) != 1 ? $plural : $singular;
-}
-
 sub after {
 	# Read through the list of IDs and usernames in the file, remembering
 	# those things that have changed ID.
 	open my $fh, '<', $mapfile;
 	my %user_remap_to;
 	my %group_remap_to;
+	
+	my $start_time = time;
 	while (<$fh>) {
 		chomp;
 		my ($type, $id, $name) = split m{:};
@@ -158,11 +186,13 @@ sub after {
 			warn "Warning: unrecognised line '$_' in map file.\n";
 		}
 	}
+	my $end_time = time;
 	close $fh;
 	my $user_remap_count = scalar keys %user_remap_to;
 	my $group_remap_count = scalar keys %group_remap_to;
 	print pluralise($user_remap_count, 'user'), " and ",
 	      pluralise($group_remap_count, 'group'), " to convert.\n";
+	time_stats($start_time, $end_time, $user_remap_count + $group_remap_count, 'id');
 	print "Ready to search file system from '$base_path'...\n";
 	
 	# Now search the file system changing the owner and group of each object
@@ -188,9 +218,12 @@ sub after {
 		}
 	};
 	
+	$start_time = time;
 	find($check_id_sub, $base_path);
+	$end_time = time;
 	print pluralise($entities_checked, 'file system object'), " checked, ",
 		  pluralise($entities_changed, 'file system object'), " changed.\n";
+	time_stats($start_time, $end_time, $entities_checked, 'check');
 }
 
 if ($mode eq 'before') {
