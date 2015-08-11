@@ -29,19 +29,21 @@ use Getopt::Long;
 #  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 #  MA 02110-1301, USA.
 
-my %modes = map { $_ => 1 } qw{ before after };
-my $mode = 'before';
-my $mapfile = 'mapfile.txt';
+my $mode = 'scan';
+my $scanfile = 'id_scan.txt';
+my $mapfile = 'id_map.txt';
 my ($start_id, $end_id);
 my ($start_uid, $end_uid);
 my ($start_gid, $end_gid);
 my $base_path;
+my $reverse = 0;
 my $dry_run = 0;
 my $verbose = 0;
 
 GetOptions(
 	'mode|m=s'			=> \$mode,
-	'file|f=s'			=> \$mapfile,
+	'scan-file|sf=s'	=> \$scanfile,
+	'map-file|mf=s'		=> \$mapfile,
 	'start-id|s=i'		=> \$start_id,
 	'end-id|e=i'		=> \$end_id,
 	'start-uid|su=i'	=> \$start_uid,
@@ -49,14 +51,276 @@ GetOptions(
 	'start-gid|sg=i'	=> \$start_gid,
 	'end-gid|eg=i'		=> \$end_gid,
 	'base-path|p=s'		=> \$base_path,
+	'reverse|rollback|r' => \$reverse,
 	'dry-run|n'			=> \$dry_run,
 	'verbose|v'			=> \$verbose,
 );
 
-unless (exists $modes{$mode}) {
-	die "Error: mode must be one of: ", join(', ', reverse sort keys %modes), ".\n";
+sub pluralise {
+	my ($number, $singular, $plural, $no_number) = @_;
+	$plural = $singular . 's' if not $plural;
+	my $desc = abs($number) != 1 ? $plural : $singular;
+	if ($no_number) {
+		return $desc;
+	} else {
+		return "$number $desc";
+	}
 }
-if ($mode eq 'before') {
+
+sub time_desc {
+	my ($diff) = @_;
+	my @int_names = qw{ second minute hour day };
+	my @intervals = ( 60, 60, 24 );
+	my $interval = 0;
+	my $time_desc = '';
+	do {
+		if ($time_desc ne '') {
+			$time_desc = ', ' . $time_desc;
+		}
+		$time_desc = pluralise($diff % $intervals[$interval], $int_names[$interval])
+		 . $time_desc;
+		$diff /= $intervals[$interval];
+		$interval++;
+	} while ($diff > $intervals[$interval]);
+	return $time_desc;
+}
+
+sub time_stats {
+	# Time statistics while in a loop
+	my ($before, $now, $op_num, $ops, $opname) = @_;
+	my $diff = $now - $before;
+	printf "\r%i/%i %s, %.2f %s/sec, completion in %s",
+	 $op_num, $ops, pluralise($ops, $opname),
+	 $diff/$ops, pluralise(int($diff/$ops), $opname, $opname, "no number"),
+	 time_desc($diff);
+}
+
+sub completion_stats {
+	# Time statistics for completion of loop
+	my ($before, $after, $ops, $opname) = @_;
+	my $diff = $after - $before;
+	my $opspersec = ($diff < 0.0001) ? $ops : $ops / $diff;
+	printf "%s took %s, %.2f %s/sec\n", 
+	 pluralise($ops, $opname), time_desc($diff),
+	 $opspersec, pluralise(int($opspersec), $opname, $opname, "no number");
+}
+
+sub scanner {
+	# Iterate through every ID in the range looking for valid IDs.  Remember
+	# their user name / group name in the file.  This happens before the
+	# change to the IDs.
+	if (-f $scanfile) {
+		warn "Warning: Overwriting scan file '$scanfile'.\n";
+	}
+	open my $fh, '>', $scanfile unless $dry_run;
+
+	# scan users:
+	my $users_checked = 0; my $users_to_check = $end_uid - $start_uid + 1;
+	my $users_found = 0;
+	my $start_time = time;
+	foreach my $uid ($start_uid .. $end_uid) {
+		my $name = getpwuid($uid);
+		$users_checked ++;
+		if (defined $name) {
+			print $fh "users:$uid:$name\n" unless $dry_run;
+			$users_found ++;
+		}
+		if ($verbose) {
+			time_stats($start_time, time, $users_checked, $users_to_check, 'user');
+		}
+	}
+	my $end_time = time;
+	completion_stats($start_time, $end_time, $users_found, 'user');
+
+	# scan groups:
+	my $groups_checked = 0; my $groups_to_check = $end_gid - $start_gid + 1;
+	my $groups_found = 0;
+	$start_time = time;
+	foreach my $gid ($start_gid .. $end_gid) {
+		$groups_checked ++;
+		my $name = getgrgid($gid);
+		if (defined $name) {
+			print $fh "groups:$gid:$name\n" unless $dry_run;
+			$groups_found ++;
+		}
+		if ($verbose) {
+			time_stats($start_time, time, $groups_checked, $groups_to_check, 'group');
+		}
+	}
+	$end_time = time;
+	completion_stats($start_time, $end_time, $groups_found, 'group');
+
+	close $fh unless $dry_run;
+}
+
+sub mapper {
+	my ($no_map_file) = @_;
+	# Read through the list of IDs and names in the file, and work out the
+	# mapping to the new ID.
+	open my $fh, '<', $scanfile;
+	my @lines;
+	while (<$fh>) {
+		chomp;
+		push @lines, $_
+	}
+	close $fh;
+	my $line_count = scalar @lines;
+
+	my %user_remap_to;
+	my %group_remap_to;
+
+	my $start_time = time;
+	my $line_no = 0;
+	for (@lines) {
+		$line_no ++;
+		my ($type, $id, $name) = split m{:};
+		if      ($type eq 'users') {
+			# Check uid of name
+			my $newuid = getpwnam($name);
+			if (not defined $newuid) {
+				warn "Warning: user $name does not have an id now (old ID = $id).\n";
+			} elsif ($newuid == $id) {
+				print "Note: user $name has id $id before and after.\n"
+				 if $verbose;
+			} else {
+				$user_remap_to{$id} = { 'id' => $newuid, 'name' => $name };
+			}
+		} elsif ($type eq 'groups') {
+			# Check gid of name
+			my $newgid = getgrnam($name);
+			if (not defined $newgid) {
+				warn "Warning: group $name does not have an id now (old ID = $id).\n";
+			} elsif ($newgid == $id) {
+				print "Note: group $name has id $id before and after.\n"
+				 if $verbose;
+			} else {
+				if ($dry_run) {
+					print "Note: would have chgrp'ed files for $name from old id $id to new id $newgid\n";
+				} else {
+				$group_remap_to{$id} = { 'id' => $newgid, 'name' => $name };
+				}
+			}
+		} else {
+			warn "Warning: unrecognised line '$_' in map file.\n";
+		}
+		if ($verbose) {
+			time_stats($start_time, time, $line_no, $line_count, 'ID');
+		}
+	}
+
+	my $end_time = time;
+	completion_stats($start_time, $end_time, $line_count, 'ID');
+
+	# Now write the mapping file if required
+	unless ($no_map_file or $dry_run) {
+		if (-f $mapfile) {
+			warn "Warning: overwriting '$mapfile'\n";
+		}
+		print "Writing map file '$mapfile'..." if $verbose;
+		open my $ofh, '>', $mapfile;
+		# Note that we only write the users and groups that we've found to
+		# differ in ID.  Therefore, the map file may not contain the same
+		# number of lines as the scan file.
+		foreach my $old_uid (sort {$a <=> $b} keys %user_remap_to) {
+			print $ofh "users:$old_uid:$user_remap_to{$old_uid}{name}:$user_remap_to{$old_uid}{id}\n";
+		}
+		foreach my $old_gid (sort {$a <=> $b} keys %group_remap_to) {
+			print $ofh "groups:$old_gid:$group_remap_to{$old_gid}{name}:$group_remap_to{$old_gid}{id}\n";
+		}
+		close $ofh;
+		print "done.\n" if $verbose;
+	}
+
+	# Give the caller the chance to remember the user and group remappings
+	return \%user_remap_to, \%group_remap_to;
+}
+
+sub filer {
+	my ($no_map_file, $user_remap_href, $group_remap_href) = @_;
+	my %user_remap_to;
+	my %group_remap_to;
+	if ($no_map_file) {
+		# Get the mappings from the previous mapping process.
+		%user_remap_to = %$user_remap_href;
+		%group_remap_to = %$group_remap_href;
+	} else {
+		# Load the mapping from old IDs to new IDs.
+		open my $fh, '<', $mapfile;
+		while (<$fh>) {
+			chomp;
+			my ($type, $old_id, $name, $new_id) = split m{:};
+			# Use the complete form of the hashes for compatibility with the
+			# hashrefs from mapper.
+			if ($type eq 'users') {
+				$user_remap_to{$old_id}  = { 'id' => $new_id, 'name' => $name };
+			} elsif ($type eq 'groups') {
+				$group_remap_to{$old_id} = { 'id' => $new_id, 'name' => $name };
+			} else {
+				warn "Warning: unrecognised line '$_' in $mapfile.\n";
+			}
+		}
+		close $fh;
+	}
+
+	my $user_remap_count = scalar keys %user_remap_to;
+	my $group_remap_count = scalar keys %group_remap_to;
+	print pluralise($user_remap_count, 'user'), " and ",
+	      pluralise($group_remap_count, 'group'), " to convert.\n";
+	print "Ready to search file system from '$base_path'...\n";
+	
+	# Now search the file system changing the owner and group of each object
+	# that has changed.
+	my $entities_checked = 0;
+	my $entities_changed = 0;
+	my $check_id_sub = sub {
+		# Remember, we're now in $File::Find::dir, so stat and chown on $_
+		my ($fuid, $fgid) = (stat($_))[4,5];
+		$entities_checked++;
+		unless (defined $fuid and defined $fgid) {
+			warn "Warning: file '$File::Find::name' stat failed - maybe file is missing?\n";
+			return;
+		}
+		return unless exists $user_remap_to{$fuid} or exists $group_remap_to{$fgid};
+		my $newfuid = $user_remap_to{$fuid}{'id'} || $fuid;
+		my $newfgid = $group_remap_to{$fgid}{'id'} || $fgid;
+		# Assertion - due to previous mapping operation, only different IDs
+		# are presented here.
+		if ($dry_run) {
+			print "Would have changed '$File::Find::name' to ($newfuid, $newfgid)\n";
+		} else {
+			print "Changing '$File::Find::name' to ($newfuid, $newfgid)\n"
+			 if $verbose;
+			# Optimise here: Perl's chown takes an array of files.  Batch
+			# arguments up per directory?
+			chown $newfuid, $newfgid, $_;
+			$entities_changed++;
+		}
+	};
+	
+	my $start_time = time;
+	find($check_id_sub, $base_path);
+	my $end_time = time;
+	print pluralise($entities_checked, 'file system object'), " checked, ",
+		  pluralise($entities_changed, 'file system object'), " changed.\n";
+	completion_stats($start_time, $end_time, $entities_checked, 'check');
+}
+
+sub after {
+	my ($u_r_h, $g_r_h) = mapper("no map file");
+	filer("no map file", $u_r_h, $g_r_h);
+}
+
+my %mode_sub = (
+	'scan'	=> \&scanner,
+	'map'	=> \&mapper,
+	'files'	=> \&filer,
+	'after' => \&after,
+);
+
+unless (exists $mode_sub{$mode}) {
+	die "Error: mode must be one of: ", join(', ', sort keys %mode_sub), ".\n";
+}
+if ($mode eq 'scan') {
 	# Check before mode options
 	if (defined $start_id and not defined $start_uid and not defined $start_gid) {
 		$start_uid = $start_id;
@@ -78,174 +342,22 @@ if ($mode eq 'before') {
 	unless (defined $end_gid) {
 		die "Error: end GID must be set by -end-gid or -eg (or -end-id | -e)\n";
 	}
-} elsif ($mode eq 'after') {
+} elsif ($mode eq 'map' or $mode eq 'after') {
+	unless (-r $scanfile) {
+		die "Error: cannot read scan file '$scanfile'.\n";
+	}
+} elsif ($mode eq 'files') {
 	unless (defined $base_path) {
 		die "Error: base path must be set by -base-path or -p\n";
 	}
+	unless (-r $mapfile) {
+		die "Error: cannot read map file '$mapfile'.\n";
+	}
 }
+
 if ($verbose) {
 	$| = 1; # Flush stdout after every write
 }
 
-sub pluralise {
-	my ($number, $singular, $plural, $no_number) = @_;
-	$plural = $singular . 's' if not $plural;
-	my $desc = abs($number) != 1 ? $plural : $singular;
-	if ($no_number) {
-		return $desc;
-	} else {
-		return "$number $desc";
-	}
-}
-
-sub time_stats {
-	my ($before, $after, $ops, $opname) = @_;
-	my $diff = $after - $before;
-	my @int_names = qw{ second minute hour day };
-	my @intervals = ( 60, 60, 24 );
-	my $interval = 0;
-	my $time_desc = '';
-	do {
-		if ($time_desc ne '') {
-			$time_desc = ', ' . $time_desc;
-		}
-		$time_desc = pluralise($diff % $intervals[$interval], $int_names[$interval])
-		 . $time_desc;
-		$diff /= $intervals[$interval];
-		$interval++;
-	} while ($diff > $intervals[$interval]);
-	printf "%s took %s, %.2f %s/sec\n", 
-	 pluralise($ops, $opname), $time_desc, 
-	 $diff/$ops, pluralise(int($diff/$ops), $opname, "$opname", "no number");
-}
-
-sub before {
-	# Iterate through every ID in the range looking for valid IDs.  Remember
-	# their username in the file;
-	open my $fh, '>', $mapfile;
-
-	# scan users:
-	my $users_found = 0;
-	my $start_time = time;
-	foreach my $uid ($start_uid .. $end_uid) {
-		print "\rChecking user $uid..."
-		 if $verbose;
-		my $name = getpwuid($uid);
-		if (defined $name) {
-			print $fh "users:$uid:$name\n";
-		}
-		$users_found ++;
-	}
-	my $end_time = time;
-	print "\n" if $verbose;
-	time_stats($start_time, $end_time, $users_found, 'user');
-
-	# scan groups:
-	my $groups_found = 0;
-	$start_time = time;
-	foreach my $gid ($start_gid .. $end_gid) {
-		print "\rChecking group $gid..."
-		 if $verbose;
-		my $name = getgrgid($gid);
-		if (defined $name) {
-			print $fh "groups:$gid:$name\n";
-		}
-		$groups_found ++;
-	}
-	$end_time = time;
-	print "\n" if $verbose;
-	time_stats($start_time, $end_time, $groups_found, 'group');
-
-	close $fh;
-}
-
-sub after {
-	# Read through the list of IDs and usernames in the file, remembering
-	# those things that have changed ID.
-	open my $fh, '<', $mapfile;
-	my %user_remap_to;
-	my %group_remap_to;
-	
-	my $start_time = time;
-	while (<$fh>) {
-		chomp;
-		my ($type, $id, $name) = split m{:};
-		if      ($type eq 'users') {
-			# Check uid of name
-			my $newuid = getpwnam($name);
-			if (not defined $newuid) {
-				warn "Warning: user $name does not have an id now (old ID = $id).\n";
-			} elsif ($newuid == $id) {
-				print "Note: user $name has id $id before and after.\n"
-				 if $verbose;
-			} else {
-				$user_remap_to{$id} = $newuid;
-			}
-		} elsif ($type eq 'groups') {
-			# Check gid of name
-			my $newgid = getgrnam($name);
-			if (not defined $newgid) {
-				warn "Warning: group $name does not have an id now (old ID = $id).\n";
-			} elsif ($newgid == $id) {
-				print "Note: group $name has id $id before and after.\n"
-				 if $verbose;
-			} else {
-				if ($dry_run) {
-					print "Note: would have chgrp'ed files for $name from old id $id to new id $newgid\n";
-				} else {
-				$group_remap_to{$id} = $newgid;
-				}
-			}
-		} else {
-			warn "Warning: unrecognised line '$_' in map file.\n";
-		}
-	}
-	my $end_time = time;
-	close $fh;
-	my $user_remap_count = scalar keys %user_remap_to;
-	my $group_remap_count = scalar keys %group_remap_to;
-	print pluralise($user_remap_count, 'user'), " and ",
-	      pluralise($group_remap_count, 'group'), " to convert.\n";
-	time_stats($start_time, $end_time, $user_remap_count + $group_remap_count, 'id');
-	print "Ready to search file system from '$base_path'...\n";
-	
-	# Now search the file system changing the owner and group of each object
-	# that has changed.
-	my $entities_checked = 0;
-	my $entities_changed = 0;
-	my $check_id_sub = sub {
-		# Remember, we're now in $File::Find::dir, so stat and chown on $_
-		my ($fuid, $fgid) = (stat($_))[4,5];
-		$entities_checked++;
-		unless (defined $fuid and defined $fgid) {
-			warn "Warning: file '$File::Find::name' stat failed - maybe file is missing?\n";
-			return;
-		}
-		return unless exists $user_remap_to{$fuid} or exists $group_remap_to{$fgid};
-		my $newfuid = $user_remap_to{$fuid} || $fuid; 
-		my $newfgid = $group_remap_to{$fgid} || $fgid;
-		if ($dry_run) {
-			print "Would have changed '$File::Find::name' to ($newfuid, $newfgid)\n";
-		} else {
-			print "Changing '$File::Find::name' to ($newfuid, $newfgid)\n"
-			 if $verbose;
-			# Optimise here: Perl's chown takes an array of files.  Batch
-			# arguments up per directory?
-			chown $newfuid, $newfgid, $_;
-			$entities_changed++;
-		}
-	};
-	
-	$start_time = time;
-	find($check_id_sub, $base_path);
-	$end_time = time;
-	print pluralise($entities_checked, 'file system object'), " checked, ",
-		  pluralise($entities_changed, 'file system object'), " changed.\n";
-	time_stats($start_time, $end_time, $entities_checked, 'check');
-}
-
-if ($mode eq 'before') {
-	before();
-} elsif ($mode eq 'after') {
-	after();
-}
+# Now execute via our hash dispatcher;
+&{ $mode_sub{$mode} };
