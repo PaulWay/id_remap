@@ -262,6 +262,22 @@ sub filer {
 		close $fh;
 	}
 
+	if ($reverse) {
+		print "Reversing mappings for -reverse mode..." if $verbose;
+		my %new_user_remap;
+		my %new_group_remap;
+		# The reversal is complicated since the old user
+		while (my ($id, $val) = each %user_remap_to) {
+			$new_user_remap{$val->{'id'}} = { 'name' => $val->{'name'}, 'id' => $id };
+		}
+		while (my ($id, $val) = each %group_remap_to) {
+			$new_group_remap{$val->{'id'}} = { 'name' => $val->{'name'}, 'id' => $id };
+		}
+		%user_remap_to = %new_user_remap;
+		%group_remap_to = %new_group_remap;
+		print "done\n" if $verbose;
+	}
+
 	my $user_remap_count = scalar keys %user_remap_to;
 	my $group_remap_count = scalar keys %group_remap_to;
 	print pluralise($user_remap_count, 'user'), " and ",
@@ -341,6 +357,9 @@ if ($mode eq 'scan') {
 	}
 	unless (defined $end_gid) {
 		die "Error: end GID must be set by -end-gid or -eg (or -end-id | -e)\n";
+	}
+	if ($reverse) {
+		warn "Warning: -reverse mode has no effect when scanning for IDs.\n";
 	}
 } elsif ($mode eq 'map' or $mode eq 'after') {
 	unless (-r $scanfile) {
