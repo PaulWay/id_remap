@@ -39,6 +39,7 @@ my $base_path;
 my $reverse = 0;
 my $dry_run = 0;
 my $verbose = 0;
+my $help = 0;
 
 GetOptions(
 	'mode|m=s'			=> \$mode,
@@ -54,7 +55,36 @@ GetOptions(
 	'reverse|rollback|r' => \$reverse,
 	'dry-run|n'			=> \$dry_run,
 	'verbose|v'			=> \$verbose,
+	'help|h'			=> \$help,
 );
+
+if ($help) {
+	print "$0 - support bulk changes in UID / GID and update file system to suit.
+Usage: $0 -mode (scan|map|file|after) ...
+Options:
+ -m(ode) scan|map|file|after	- mode to run in - see below.
+ -scan-file|sf [id_scan.txt]	- file for ID scan results.
+ -map-file|mf [id_map.txt]		- file for ID map results.
+ -s(tart-id) (number)			- scan range start UID and GID.
+ -e(nd-id) (number)				- scan range end UID and GID.
+ -start-uid|su (number)			- scan range start UID.
+ -end-uid|eu (number)			- scan range end UID.
+ -start-gid|sg (number)			- scan range start GID.
+ -end-gid|eg (number)			- scan range end GID.
+ -base-path|p (path)			- path to scan for ID changes.
+ -r(everse|rollback)			- reverse ID mapping in file changes.
+ -d(ry-run)						- do not make changes to file system.
+ -v(erbose)						- print extra timing and progress information.
+ -h(elp)						- this help.
+In 'scan' mode, scan the given ID ranges and remember the name for each ID.
+In 'map' mode, read the scanned ranges and determine new ID for each change.
+In 'file' mode, read map and change file system entities to new IDs if reqd.
+'after' mode does 'map' and 'file' but writes no map file.
+Normally, 1) scan, 2) change ID scheme, 3) map, 4) file.
+Map file should remain constant across machines (saves processing time).
+";
+	exit 0;
+}
 
 sub pluralise {
 	my ($number, $singular, $plural, $no_number) = @_;
@@ -329,7 +359,7 @@ sub after {
 my %mode_sub = (
 	'scan'	=> \&scanner,
 	'map'	=> \&mapper,
-	'files'	=> \&filer,
+	'file'	=> \&filer,
 	'after' => \&after,
 );
 
