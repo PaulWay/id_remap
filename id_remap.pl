@@ -190,7 +190,7 @@ sub mapper {
 	open my $fh, '<', $scanfile;
 	my @lines;
 	while (<$fh>) {
-		chomp;
+		chomp; tr{\r}{}d;
 		push @lines, $_
 	}
 	close $fh;
@@ -277,7 +277,7 @@ sub filer {
 		# Load the mapping from old IDs to new IDs.
 		open my $fh, '<', $mapfile;
 		while (<$fh>) {
-			chomp;
+			chomp; tr{\r}{}d;
 			my ($type, $old_id, $name, $new_id) = split m{:};
 			# Use the complete form of the hashes for compatibility with the
 			# hashrefs from mapper.
