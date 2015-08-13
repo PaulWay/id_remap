@@ -327,8 +327,10 @@ sub filer {
 			return;
 		}
 		return unless exists $user_remap_to{$fuid} or exists $group_remap_to{$fgid};
-		my $newfuid = $user_remap_to{$fuid}{'id'} || $fuid;
-		my $newfgid = $group_remap_to{$fgid}{'id'} || $fgid;
+		my $newfuid = exists $user_remap_to{$fuid} ? $user_remap_to{$fuid}{'id'} : $fuid;
+		my $newfgid = exists $group_remap_to{$fgid} ? $group_remap_to{$fgid}{'id'} : $fgid;
+		die "Will not change UID 0!\n" if $fuid == 0 or $newfuid == 0;
+		die "Will not change GID 0!\n" if $fgid == 0 or $newfgid == 0;
 		# Assertion - due to previous mapping operation, only different IDs
 		# are presented here.
 		if ($dry_run) {
