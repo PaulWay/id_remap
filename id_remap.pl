@@ -1,4 +1,5 @@
 #!/usr/bin/perl -w
+# vim: set ts=4 ai :
 
 use warnings;
 use strict;
@@ -11,8 +12,8 @@ use Getopt::Long;
 # change to their numbering and reassign the contents of a directory path
 # to the correct usernames and group names afterward.
 
-# Written by Paul Wayper for Red Hat in August 2015.
-# vim: set ts=4 ai :
+# Written by Paul Wayper.  His employer doesn't have anything to do with it.
+# No warranty expressed or implied.  Dry run and testing is your friend.
 
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
